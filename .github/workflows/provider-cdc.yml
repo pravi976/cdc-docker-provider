@@ -83,14 +83,13 @@ jobs:
 
       - name: Verify Provider Against Pact Broker
         run: |
-          PACT_BROKER_BASE_URL="${PACT_BROKER_BASE_URL:-http://localhost:9292}"
+          PACT_BROKER_BASE_URL="http://localhost:9292"
           ./gradlew --no-daemon clean test \
             --tests "com.fedex.cdc.demo.provider.InventoryProviderPactVerificationTest" \
             --stacktrace
         env:
           GH_PACKAGES_USER: ${{ github.actor }}
           GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
-          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
           PACT_BROKER_USERNAME: ${{ secrets.PACT_BROKER_USERNAME }}
           PACT_BROKER_PASSWORD: ${{ secrets.PACT_BROKER_PASSWORD }}
           GITHUB_SHA: ${{ github.sha }}
@@ -98,7 +97,7 @@ jobs:
 
       - name: Can I Deploy (Provider)
         run: |
-          PACT_BROKER_BASE_URL="${PACT_BROKER_BASE_URL:-http://localhost:9292}"
+          PACT_BROKER_BASE_URL="http://localhost:9292"
           AUTH_ARGS=()
           if [ -n "${PACT_BROKER_USERNAME:-}" ] && [ -n "${PACT_BROKER_PASSWORD:-}" ]; then
             AUTH_ARGS+=(--broker-username "${PACT_BROKER_USERNAME}" --broker-password "${PACT_BROKER_PASSWORD}")
@@ -113,7 +112,6 @@ jobs:
             --retry-while-unknown 30 \
             --retry-interval 10
         env:
-          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
           PACT_BROKER_USERNAME: ${{ secrets.PACT_BROKER_USERNAME }}
           PACT_BROKER_PASSWORD: ${{ secrets.PACT_BROKER_PASSWORD }}
 
@@ -188,7 +186,7 @@ jobs:
 
       - name: Record Provider Deployment in Broker
         run: |
-          PACT_BROKER_BASE_URL="${PACT_BROKER_BASE_URL:-http://localhost:9292}"
+          PACT_BROKER_BASE_URL="http://localhost:9292"
           AUTH_ARGS=()
           if [ -n "${PACT_BROKER_USERNAME:-}" ] && [ -n "${PACT_BROKER_PASSWORD:-}" ]; then
             AUTH_ARGS+=(--broker-username "${PACT_BROKER_USERNAME}" --broker-password "${PACT_BROKER_PASSWORD}")
@@ -200,6 +198,5 @@ jobs:
             --version "${GITHUB_SHA}" \
             --environment "${DEPLOY_ENV}"
         env:
-          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
           PACT_BROKER_USERNAME: ${{ secrets.PACT_BROKER_USERNAME }}
           PACT_BROKER_PASSWORD: ${{ secrets.PACT_BROKER_PASSWORD }}
