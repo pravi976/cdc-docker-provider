@@ -35,13 +35,16 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
 
+      - name: Ensure Gradle Wrapper Is Executable
+        run: chmod +x ./gradlew
+
       - name: Verify Provider Against Pact Broker
         run: |
           if [ -z "${PACT_BROKER_BASE_URL:-}" ]; then
             echo "PACT_BROKER_BASE_URL not set. Skipping provider verification."
             exit 0
           fi
-          gradle --no-daemon clean test \
+          ./gradlew --no-daemon clean test \
             --tests "com.fedex.cdc.demo.provider.InventoryProviderPactVerificationTest" \
             --stacktrace
         env:
@@ -92,8 +95,11 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
 
+      - name: Ensure Gradle Wrapper Is Executable
+        run: chmod +x ./gradlew
+
       - name: Build Application Jar
-        run: gradle --no-daemon clean bootJar -x test --stacktrace
+        run: ./gradlew --no-daemon clean bootJar -x test --stacktrace
         env:
           GH_PACKAGES_USER: ${{ github.actor }}
           GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
