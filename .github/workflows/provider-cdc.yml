@@ -19,6 +19,30 @@ env:
 jobs:
   verify-provider:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: pact
+          POSTGRES_USER: pact
+          POSTGRES_PASSWORD: pact
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pact -d pact"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      pact-broker:
+        image: pactfoundation/pact-broker:latest
+        env:
+          PACT_BROKER_DATABASE_ADAPTER: postgres
+          PACT_BROKER_DATABASE_HOST: postgres
+          PACT_BROKER_DATABASE_NAME: pact
+          PACT_BROKER_DATABASE_USERNAME: pact
+          PACT_BROKER_DATABASE_PASSWORD: pact
+        ports:
+          - 9292:9292
     permissions:
       contents: read
       packages: read
@@ -38,12 +62,21 @@ jobs:
       - name: Ensure Gradle Wrapper Is Executable
         run: chmod +x ./gradlew
 
+      - name: Wait for Pact Broker
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://localhost:9292 > /dev/null; then
+              echo "Pact Broker is ready."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Pact Broker did not become ready in time."
+          exit 1
+
       - name: Verify Provider Against Pact Broker
         run: |
-          if [ -z "${PACT_BROKER_BASE_URL:-}" ]; then
-            echo "PACT_BROKER_BASE_URL not set. Skipping provider verification."
-            exit 0
-          fi
+          PACT_BROKER_BASE_URL="${PACT_BROKER_BASE_URL:-http://localhost:9292}"
           ./gradlew --no-daemon clean test \
             --tests "com.fedex.cdc.demo.provider.InventoryProviderPactVerificationTest" \
             --stacktrace
@@ -58,10 +91,7 @@ jobs:
 
       - name: Can I Deploy (Provider)
         run: |
-          if [ -z "${PACT_BROKER_BASE_URL:-}" ]; then
-            echo "PACT_BROKER_BASE_URL not set. Skipping can-i-deploy."
-            exit 0
-          fi
+          PACT_BROKER_BASE_URL="${PACT_BROKER_BASE_URL:-http://localhost:9292}"
           AUTH_ARGS=()
           if [ -n "${PACT_BROKER_USERNAME:-}" ] && [ -n "${PACT_BROKER_PASSWORD:-}" ]; then
             AUTH_ARGS+=(--broker-username "${PACT_BROKER_USERNAME}" --broker-password "${PACT_BROKER_PASSWORD}")
@@ -150,10 +180,7 @@ jobs:
 
       - name: Record Provider Deployment in Broker
         run: |
-          if [ -z "${PACT_BROKER_BASE_URL:-}" ]; then
-            echo "PACT_BROKER_BASE_URL not set. Skipping record deployment."
-            exit 0
-          fi
+          PACT_BROKER_BASE_URL="${PACT_BROKER_BASE_URL:-http://localhost:9292}"
           AUTH_ARGS=()
           if [ -n "${PACT_BROKER_USERNAME:-}" ] && [ -n "${PACT_BROKER_PASSWORD:-}" ]; then
             AUTH_ARGS+=(--broker-username "${PACT_BROKER_USERNAME}" --broker-password "${PACT_BROKER_PASSWORD}")
