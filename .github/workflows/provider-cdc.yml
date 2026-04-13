@@ -100,6 +100,7 @@ jobs:
       - name: Publish Provider Verification Status To Shared Branch
         if: always()
         run: |
+          cd contracts-repo
           STATUS_DIR="contracts/verification/${CONSUMER_NAME}/${CONSUMER_SHA}"
           STATUS_FILE="${STATUS_DIR}/${PROVIDER_NAME}-${DEPLOY_TARGET}.json"
           mkdir -p "${STATUS_DIR}"
@@ -120,7 +121,6 @@ jobs:
             "sourceRunId": "${GITHUB_RUN_ID}"
           }
           EOF
-          cd contracts-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "${STATUS_FILE}"
