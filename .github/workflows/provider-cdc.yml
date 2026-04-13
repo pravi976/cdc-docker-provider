@@ -1,4 +1,4 @@
-name: Provider CDC Pipeline
+name: Provider CDC Pipeline (Brokerless Shared Contracts)
 
 on:
   push:
@@ -15,41 +15,20 @@ env:
   CDC_FRAMEWORK_VERSION: ${{ vars.CDC_FRAMEWORK_VERSION }}
   CDC_PACKAGES_OWNER: ${{ vars.CDC_PACKAGES_OWNER }}
   CDC_PACKAGES_REPO: ${{ vars.CDC_PACKAGES_REPO }}
-  PACTICIPANT: supply-inventory-provider
+  PROVIDER_PACTICIPANT: supply-inventory-provider
+  CONSUMER_PACTICIPANT: supply-orders-consumer
   DEPLOY_ENV: test
+  SHARED_CONTRACT_REPO: ${{ vars.SHARED_CONTRACT_REPO || 'pravi976/cdc-docker-consumer' }}
+  SHARED_CONTRACT_BRANCH: ${{ vars.SHARED_CONTRACT_BRANCH || 'contracts' }}
 
 jobs:
   verify-provider:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: pact
-          POSTGRES_USER: pact
-          POSTGRES_PASSWORD: pact
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U pact -d pact"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-      pact-broker:
-        image: pactfoundation/pact-broker:latest
-        env:
-          PACT_BROKER_DATABASE_ADAPTER: postgres
-          PACT_BROKER_DATABASE_HOST: postgres
-          PACT_BROKER_DATABASE_NAME: pact
-          PACT_BROKER_DATABASE_USERNAME: pact
-          PACT_BROKER_DATABASE_PASSWORD: pact
-        ports:
-          - 9292:9292
     permissions:
       contents: read
       packages: read
     steps:
-      - name: Checkout
+      - name: Checkout Provider Repo
         uses: actions/checkout@v5
 
       - name: Set up Java
@@ -64,58 +43,101 @@ jobs:
       - name: Ensure Gradle Wrapper Is Executable
         run: chmod +x ./gradlew
 
-      - name: Wait for Pact Broker
+      - name: Resolve Contract Coordinates
         run: |
-          for i in {1..60}; do
-            if curl -fsS http://localhost:9292 > /dev/null; then
-              echo "Pact Broker is ready."
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "Pact Broker did not become ready in time."
-          exit 1
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "CONSUMER_SHA=${{ github.event.client_payload.source_sha }}" >> "${GITHUB_ENV}"
+            echo "SHARED_REPO=${{ github.event.client_payload.shared_contract_repo || env.SHARED_CONTRACT_REPO }}" >> "${GITHUB_ENV}"
+            echo "SHARED_BRANCH=${{ github.event.client_payload.shared_contract_branch || env.SHARED_CONTRACT_BRANCH }}" >> "${GITHUB_ENV}"
+            echo "CONSUMER_NAME=${{ github.event.client_payload.consumer_pacticipant || env.CONSUMER_PACTICIPANT }}" >> "${GITHUB_ENV}"
+            echo "PROVIDER_NAME=${{ github.event.client_payload.provider_pacticipant || env.PROVIDER_PACTICIPANT }}" >> "${GITHUB_ENV}"
+            echo "DEPLOY_TARGET=${{ github.event.client_payload.deploy_env || env.DEPLOY_ENV }}" >> "${GITHUB_ENV}"
+          else
+            echo "SHARED_REPO=${SHARED_CONTRACT_REPO}" >> "${GITHUB_ENV}"
+            echo "SHARED_BRANCH=${SHARED_CONTRACT_BRANCH}" >> "${GITHUB_ENV}"
+            echo "CONSUMER_NAME=${CONSUMER_PACTICIPANT}" >> "${GITHUB_ENV}"
+            echo "PROVIDER_NAME=${PROVIDER_PACTICIPANT}" >> "${GITHUB_ENV}"
+            echo "DEPLOY_TARGET=${DEPLOY_ENV}" >> "${GITHUB_ENV}"
+          fi
 
-      - name: Install Pact Broker CLI
-        run: |
-          gem install --user-install pact_broker-client --no-document
-          ruby -e 'print Gem.user_dir' > .gem_user_dir
-          GEM_USER_DIR="$(cat .gem_user_dir)"
-          echo "${GEM_USER_DIR}/bin" >> "${GITHUB_PATH}"
+      - name: Checkout Shared Contracts Repo/Branch
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.SHARED_REPO }}
+          ref: ${{ env.SHARED_BRANCH }}
+          path: contracts-repo
+          token: ${{ secrets.GH_REPO_DISPATCH_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: Verify Provider Against Pact Broker
+      - name: Resolve Consumer Contract Version (Fallback For Push/PR)
         run: |
-          PACT_BROKER_BASE_URL="http://localhost:9292"
+          if [ -n "${CONSUMER_SHA:-}" ]; then
+            exit 0
+          fi
+          LATEST_FILE="contracts-repo/contracts/latest/${CONSUMER_NAME}/latest.sha"
+          if [ ! -f "${LATEST_FILE}" ]; then
+            echo "No latest contract marker found at ${LATEST_FILE}"
+            exit 1
+          fi
+          echo "CONSUMER_SHA=$(cat "${LATEST_FILE}")" >> "${GITHUB_ENV}"
+
+      - name: Verify Provider Against Shared Pact Files
+        id: verify
+        continue-on-error: true
+        run: |
+          PACT_FOLDER_PATH="${GITHUB_WORKSPACE}/contracts-repo/contracts/pacts/${CONSUMER_NAME}/${CONSUMER_SHA}"
+          if [ ! -d "${PACT_FOLDER_PATH}" ]; then
+            echo "PACT folder not found: ${PACT_FOLDER_PATH}"
+            exit 1
+          fi
           ./gradlew --no-daemon clean test \
-            --tests "com.fedex.cdc.demo.provider.InventoryProviderPactVerificationTest" \
+            --tests "com.fedex.cdc.demo.provider.InventoryProviderLocalPactVerificationTest" \
             --stacktrace
         env:
           GH_PACKAGES_USER: ${{ github.actor }}
           GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
-          PACT_BROKER_USERNAME: ${{ secrets.PACT_BROKER_USERNAME }}
-          PACT_BROKER_PASSWORD: ${{ secrets.PACT_BROKER_PASSWORD }}
-          GITHUB_SHA: ${{ github.sha }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
+          PACT_FOLDER: ${{ github.workspace }}/contracts-repo/contracts/pacts/${{ env.CONSUMER_NAME }}/${{ env.CONSUMER_SHA }}
 
-      - name: Can I Deploy (Provider)
+      - name: Publish Provider Verification Status To Shared Branch
+        if: always()
         run: |
-          PACT_BROKER_BASE_URL="http://localhost:9292"
-          AUTH_ARGS=()
-          if [ -n "${PACT_BROKER_USERNAME:-}" ] && [ -n "${PACT_BROKER_PASSWORD:-}" ]; then
-            AUTH_ARGS+=(--broker-username "${PACT_BROKER_USERNAME}" --broker-password "${PACT_BROKER_PASSWORD}")
+          STATUS_DIR="contracts-repo/contracts/verification/${CONSUMER_NAME}/${CONSUMER_SHA}"
+          STATUS_FILE="${STATUS_DIR}/${PROVIDER_NAME}-${DEPLOY_TARGET}.json"
+          mkdir -p "${STATUS_DIR}"
+          RESULT="SUCCESS"
+          if [ "${{ steps.verify.outcome }}" != "success" ]; then
+            RESULT="FAILED"
           fi
-          echo "Waiting for consumer deployment/verification state in Pact Broker..."
-          pact-broker can-i-deploy \
-            --broker-base-url "${PACT_BROKER_BASE_URL}" \
-            "${AUTH_ARGS[@]}" \
-            --pacticipant "${PACTICIPANT}" \
-            --version "${GITHUB_SHA}" \
-            --to-environment "${DEPLOY_ENV}" \
-            --retry-while-unknown 30 \
-            --retry-interval 10
+          cat > "${STATUS_FILE}" <<EOF
+          {
+            "consumer": "${CONSUMER_NAME}",
+            "consumerVersion": "${CONSUMER_SHA}",
+            "provider": "${PROVIDER_NAME}",
+            "providerVersion": "${GITHUB_SHA}",
+            "environment": "${DEPLOY_TARGET}",
+            "result": "${RESULT}",
+            "verifiedAt": "$(date -u +%FT%TZ)",
+            "sourceRepository": "${GITHUB_REPOSITORY}",
+            "sourceRunId": "${GITHUB_RUN_ID}"
+          }
+          EOF
+          cd contracts-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${STATUS_FILE}"
+          if git diff --cached --quiet; then
+            echo "No verification status changes."
+            exit 0
+          fi
+          git commit -m "Verification ${RESULT}: ${CONSUMER_NAME}@${CONSUMER_SHA} by ${PROVIDER_NAME}@${GITHUB_SHA}"
+          git push origin "${SHARED_BRANCH}"
         env:
-          PACT_BROKER_USERNAME: ${{ secrets.PACT_BROKER_USERNAME }}
-          PACT_BROKER_PASSWORD: ${{ secrets.PACT_BROKER_PASSWORD }}
+          GITHUB_SHA: ${{ github.sha }}
+
+      - name: Fail Job When Verification Failed
+        if: steps.verify.outcome != 'success'
+        run: |
+          echo "Provider verification failed for consumer contract ${CONSUMER_NAME}@${CONSUMER_SHA}"
+          exit 1
 
   dockerize-and-deploy:
     runs-on: ubuntu-latest
@@ -158,47 +180,3 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
-
-      - name: Configure kubeconfig
-        run: |
-          if [ -z "${KUBE_CONFIG_DATA:-}" ]; then
-            echo "KUBE_CONFIG_DATA not set. Skipping kubeconfig setup."
-            exit 0
-          fi
-          mkdir -p "${HOME}/.kube"
-          echo "${KUBE_CONFIG_DATA}" | base64 -d > "${HOME}/.kube/config"
-        env:
-          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
-
-      - name: Deploy Provider to Kubernetes
-        run: |
-          if [ -z "${KUBE_CONFIG_DATA:-}" ] || [ -z "${DOCKERHUB_USERNAME:-}" ]; then
-            echo "Kubernetes config or Docker Hub username not set. Skipping Kubernetes deploy."
-            exit 0
-          fi
-          sed "s|__IMAGE__|${DOCKERHUB_USERNAME}/cdc-docker-provider:${GITHUB_SHA}|g" k8s/deployment.yaml | kubectl apply -f -
-          kubectl apply -f k8s/service.yaml
-          kubectl rollout status deployment/cdc-docker-provider --timeout=180s
-        env:
-          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-
-      - name: Record Provider Deployment in Broker
-        run: |
-          PACT_BROKER_BASE_URL="http://localhost:9292"
-          AUTH_ARGS=()
-          if [ -n "${PACT_BROKER_USERNAME:-}" ] && [ -n "${PACT_BROKER_PASSWORD:-}" ]; then
-            AUTH_ARGS+=(--broker-username "${PACT_BROKER_USERNAME}" --broker-password "${PACT_BROKER_PASSWORD}")
-          fi
-          pact-broker record-deployment \
-            --broker-base-url "${PACT_BROKER_BASE_URL}" \
-            "${AUTH_ARGS[@]}" \
-            --pacticipant "${PACTICIPANT}" \
-            --version "${GITHUB_SHA}" \
-            --environment "${DEPLOY_ENV}"
-        env:
-          PACT_BROKER_USERNAME: ${{ secrets.PACT_BROKER_USERNAME }}
-          PACT_BROKER_PASSWORD: ${{ secrets.PACT_BROKER_PASSWORD }}

@@ -1,15 +1,15 @@
 # cdc-docker-provider
 
-Provider Spring Boot app that verifies consumer contracts from Pact Broker using `consumer-driven-contract-testing`.
+Provider Spring Boot app that verifies consumer contracts from shared GitHub contract files using `consumer-driven-contract-testing`.
 
 ## What This Pipeline Does
 
-1. Runs provider verification tests against Pact Broker.
-2. Publishes provider verification results.
-3. Runs `can-i-deploy` for provider version.
+1. Fetches latest consumer contract files from shared GitHub `contracts` branch (or specific SHA from dispatch payload).
+2. Runs provider verification tests from local pact files via `PACT_FOLDER`.
+3. Publishes provider verification status JSON back to shared contracts branch.
+4. Enables `can-i-deploy` equivalent for consumer and provider deployment gates.
 4. Builds/pushes Docker image to Docker Hub.
 5. Deploys to Kubernetes (if kube secret is configured).
-6. Records deployment in Pact Broker.
 
 ## Decoupled Dependency Setup
 
@@ -31,25 +31,24 @@ Main dependency:
 ## Required GitHub Secrets
 
 - `GH_PACKAGES_TOKEN` (PAT with `read:packages`)
-- `PACT_BROKER_BASE_URL`
-- `PACT_BROKER_USERNAME`
-- `PACT_BROKER_PASSWORD`
+- `GH_REPO_DISPATCH_TOKEN` (classic PAT with `repo` scope to read/write shared contracts branch)
 - `DOCKERHUB_USERNAME`
 - `DOCKERHUB_TOKEN`
 - `KUBE_CONFIG_DATA` (base64 kubeconfig, optional for K8s deploy)
 
+## Optional GitHub Variables
+
+- `SHARED_CONTRACT_REPO` (default: `pravi976/cdc-docker-consumer`)
+- `SHARED_CONTRACT_BRANCH` (default: `contracts`)
+
 ## Local Verification
 
-Broker-based verification:
+Shared-file-based verification:
 
 ```powershell
 cd C:\Users\pravi\spring-services\cdc-docker-provider
-$env:PACT_BROKER_BASE_URL="http://localhost:9292"
-$env:PACT_BROKER_USERNAME="..."
-$env:PACT_BROKER_PASSWORD="..."
-$env:GITHUB_SHA="local-dev-1"
-$env:GITHUB_REF_NAME="main"
-gradle clean test --tests "com.fedex.cdc.demo.provider.InventoryProviderPactVerificationTest" --stacktrace
+$env:PACT_FOLDER="C:\path\to\contracts\pacts\supply-orders-consumer\<consumer-sha>"
+gradle clean test --tests "com.fedex.cdc.demo.provider.InventoryProviderLocalPactVerificationTest" --stacktrace
 ```
 
 Build app jar:
