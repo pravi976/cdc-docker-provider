@@ -1,4 +1,4 @@
-# cdc-docker-provider
+# cdc-docker-provider Steps
 
 Provider Spring Boot app that verifies consumer contracts from shared GitHub contract files using `consumer-driven-contract-testing`.
 
